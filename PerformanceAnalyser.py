@@ -21,6 +21,7 @@
 
 import xml.etree.ElementTree as ET
 from xml.dom import minidom
+import math
 
 #--------------------------------------------------
 # Parsing the XML file to receiving message info
@@ -54,7 +55,10 @@ def print_message_details(messages_list):
               f"MessageSize: {msg['MessageSize']}\n"
               f"Sender: {msg['Sender']}\n"
               f"Receiver: {msg['Receiver']}\n"
-              f"Transmission Delay d3: {msg['TransmissionDelay']}\n"
+              f"Transmission Delay d3: {msg['TD']}\n"
+              f"End-to-End Delay: {msg.get('DBEB', 'N/A')}\n"
+              f"Access Delay: {msg.get('DMAC', 'N/A')}\n"
+              f"Schedulability Test: {msg.get('Schedulable', 'N/A')}\n"
               f"{'-' * 40}")
 
 #--------------------------------
@@ -82,8 +86,54 @@ def compute_transmission_delay(messages):
         
         # Calculate the transmission delay
         transmission_delay = message_size_bits / TransmissionRate 
-        message['TransmissionDelay'] = transmission_delay
+        message['TD'] = transmission_delay
 
+    return messages
+#----------------------------------------------------------------------
+# Performance analysis in terms of end-to-end delays and access delays
+#----------------------------------------------------------------------
+def compute_end_to_end_delay(messages):
+    #The timing analysis is performed considering non-preemptive RM
+    for message in messages:
+        current_message_freq = message['Frequency']
+        lower_priority_list = [message_n for message_n in messages if message_n['Frequency'] < current_message_freq]
+        higher_equal_priority_list = [message_p for message_p in messages if message_p['Frequency'] >= current_message_freq and message_p != message]
+
+        #Computing Max propogation time from list of messages with priority less than current_message
+        if len(lower_priority_list) == 0:
+            max_lp_messages = 0
+        else:
+            max_dt_dict = max(lower_priority_list, key=lambda x: x['TD'])
+            max_lp_messages = max_dt_dict['TD']
+        
+        #End to End Delay Bound is represented as W_n_1
+        #Initial Condition
+        W_n_1 = message['TD']
+        W_n = 0
+        time_period = (1.0/message['Frequency'])
+
+        #End to End Calculations
+        while((W_n != W_n_1) and W_n_1 <= time_period):
+            W_n = W_n_1
+            C_sum = 0
+            if len(higher_equal_priority_list) != 0:
+                for message in higher_equal_priority_list:
+                    C_sum += message['TD'] * math.ceil(W_n / (1.0 / message['Frequency']))
+                
+                W_n_1 = message['TD'] + max_lp_messages + C_sum
+
+        message['DBEB'] = W_n_1
+
+        #The access delay is caused as message are queued, as one message is transmitted over the physical layer at a particular instance of time
+        #Access Delay d2 = End to End Delay - Transmission Delay 
+        message['DMAC'] = message['DBEB'] - message['TD']
+
+        #Schedulability is checked if End-to-End Delay is less than the Time Period
+        if(W_n_1 <= time_period) and (W_n == W_n_1):
+            message['Schedulable'] = True
+        else:
+            message['Schedulable'] = False
+        
     return messages
 
 #--------------------------------
@@ -95,9 +145,8 @@ def messages_to_xml(messages, output_file):
     
     for message in messages:
         message_element = ET.SubElement(root, "message")
-        
         for key, value in message.items():
-            sub_element = ET.SubElement(message_element, key.lower())
+            sub_element = ET.SubElement(message_element, key.upper())
             sub_element.text = str(value)
     
 
@@ -115,12 +164,13 @@ def messages_to_xml(messages, output_file):
 
 def main():
     file_path = "xmlB1-periodique.xml"
-    output_file = "output_messages.xml"
+    output_file = "output_messages1.xml"
 
     messages = parse_messages(file_path)
     messages = compute_transmission_delay(messages)
-    messages_to_xml(messages, output_file)
-
+    messages = compute_end_to_end_delay(messages)
+    #messages_to_xml(messages, output_file)
+    #print(messages)
     print_message_details(messages)
 
 if __name__ == "__main__":
